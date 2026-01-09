@@ -1,12 +1,10 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useEffect, useCallback } from "react";
+import Image from "next/image";
 import { motion, AnimatePresence } from "framer-motion";
 import {
     Trophy,
-    Flame,
-    Timer,
-    Star,
     ChevronRight,
     ChevronLeft,
     Check,
@@ -18,14 +16,17 @@ import {
     BarChart3,
     Calendar,
     Zap,
+    Star,
+    X,
 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { cn } from "@/lib/cn";
+import { searchTeams, searchPlayers, getPopularTeams, Team, Player } from "@/lib/sportsdb";
 
-// --- Constants & Mock Data ---
+// --- Constants ---
 
 const sports = [
     { id: "football", name: "Football", icon: "⚽" },
@@ -49,29 +50,6 @@ const leagues = [
     { id: "nfl", name: "NFL", sport: "football_us" },
     { id: "ufc", name: "UFC", sport: "mma" },
     { id: "f1_league", name: "Formula 1", sport: "f1" },
-];
-
-const commonTeams = [
-    { id: "real_madrid", name: "Real Madrid", detail: "Football" },
-    { id: "man_utd", name: "Manchester United", detail: "Football" },
-    { id: "liverpool", name: "Liverpool", detail: "Football" },
-    { id: "lakers", name: "LA Lakers", detail: "Basketball" },
-    { id: "warriors", name: "Golden State Warriors", detail: "Basketball" },
-    { id: "ferrari", name: "Scuderia Ferrari", detail: "F1" },
-    { id: "mclaren", name: "McLaren", detail: "F1" },
-    { id: "ny_yankees", name: "NY Yankees", detail: "Baseball" },
-    { id: "chiefs", name: "KC Chiefs", detail: "NFL" },
-];
-
-const commonPlayers = [
-    { id: "messi", name: "Lionel Messi", detail: "Football" },
-    { id: "ronaldo", name: "Cristiano Ronaldo", detail: "Football" },
-    { id: "lebron", name: "LeBron James", detail: "Basketball" },
-    { id: "verstappen", name: "Max Verstappen", detail: "F1" },
-    { id: "federer", name: "Roger Federer", detail: "Tennis" },
-    { id: "djokovic", name: "Novak Djokovic", detail: "Tennis" },
-    { id: "mcgregor", name: "Conor McGregor", detail: "MMA" },
-    { id: "hamilton", name: "Lewis Hamilton", detail: "F1" },
 ];
 
 const contentTypes = [
@@ -108,25 +86,21 @@ function StepWrapper({ children, title, subtitle, className }: { children: React
     );
 }
 
-function SelectionGrid({ items, selected, onToggle, renderItem }: { items: any[], selected: string[], onToggle: (id: string) => void, renderItem: (item: any, isSelected: boolean) => React.ReactNode }) {
-    return (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4 w-full">
-            {items.map((item) => {
-                const isSelected = selected.includes(item.id);
-                return (
-                    <motion.div
-                        key={item.id}
-                        whileHover={{ scale: 1.02 }}
-                        whileTap={{ scale: 0.98 }}
-                        onClick={() => onToggle(item.id)}
-                        className="cursor-pointer"
-                    >
-                        {renderItem(item, isSelected)}
-                    </motion.div>
-                );
-            })}
-        </div>
-    );
+// Debounce hook
+function useDebounce<T>(value: T, delay: number): T {
+    const [debouncedValue, setDebouncedValue] = useState<T>(value);
+
+    useEffect(() => {
+        const handler = setTimeout(() => {
+            setDebouncedValue(value);
+        }, delay);
+
+        return () => {
+            clearTimeout(handler);
+        };
+    }, [value, delay]);
+
+    return debouncedValue;
 }
 
 // --- Main Component ---
@@ -137,49 +111,135 @@ export default function OnboardingPage() {
 
     const [step, setStep] = useState(0);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
     // Form State
     const [selectedSports, setSelectedSports] = useState<string[]>([]);
     const [selectedLeagues, setSelectedLeagues] = useState<string[]>([]);
-    const [selectedTeams, setSelectedTeams] = useState<string[]>([]);
-    const [selectedPlayers, setSelectedPlayers] = useState<string[]>([]);
+    const [selectedTeams, setSelectedTeams] = useState<{ id: string; name: string; badge?: string }[]>([]);
+    const [selectedPlayers, setSelectedPlayers] = useState<{ id: string; name: string; thumbnail?: string }[]>([]);
     const [selectedContent, setSelectedContent] = useState<string[]>([]);
     const [selectedNotifications, setSelectedNotifications] = useState<string[]>([]);
 
     // Search State
     const [teamSearch, setTeamSearch] = useState("");
     const [playerSearch, setPlayerSearch] = useState("");
+    const [teamResults, setTeamResults] = useState<Team[]>([]);
+    const [playerResults, setPlayerResults] = useState<Player[]>([]);
+    const [isSearchingTeams, setIsSearchingTeams] = useState(false);
+    const [isSearchingPlayers, setIsSearchingPlayers] = useState(false);
+    const [popularTeams, setPopularTeams] = useState<Team[]>([]);
 
-    const filteredTeams = useMemo(() =>
-        commonTeams.filter(t => t.name.toLowerCase().includes(teamSearch.toLowerCase())),
-        [teamSearch]);
+    // Debounced search values
+    const debouncedTeamSearch = useDebounce(teamSearch, 400);
+    const debouncedPlayerSearch = useDebounce(playerSearch, 400);
 
-    const filteredPlayers = useMemo(() =>
-        commonPlayers.filter(p => p.name.toLowerCase().includes(playerSearch.toLowerCase())),
-        [playerSearch]);
+    // Fetch popular teams on mount
+    useEffect(() => {
+        getPopularTeams().then(teams => setPopularTeams(teams));
+    }, []);
 
-    if (isOnboardingComplete) {
-        router.replace("/");
-        return null;
-    }
+    // Search teams when debounced value changes
+    useEffect(() => {
+        if (debouncedTeamSearch.length >= 2) {
+            setIsSearchingTeams(true);
+            searchTeams(debouncedTeamSearch)
+                .then(results => setTeamResults(results))
+                .finally(() => setIsSearchingTeams(false));
+        } else {
+            setTeamResults([]);
+        }
+    }, [debouncedTeamSearch]);
 
-    const toggleItem = (id: string, state: string[], setState: (val: string[]) => void) => {
-        setState(state.includes(id) ? state.filter(i => i !== id) : [...state, id]);
+    // Search players when debounced value changes
+    useEffect(() => {
+        if (debouncedPlayerSearch.length >= 2) {
+            setIsSearchingPlayers(true);
+            searchPlayers(debouncedPlayerSearch)
+                .then(results => setPlayerResults(results))
+                .finally(() => setIsSearchingPlayers(false));
+        } else {
+            setPlayerResults([]);
+        }
+    }, [debouncedPlayerSearch]);
+
+    // Redirect if already complete
+    useEffect(() => {
+        if (isOnboardingComplete) {
+            router.replace("/");
+        }
+    }, [isOnboardingComplete, router]);
+
+    const toggleSport = (id: string) => {
+        setSelectedSports(prev =>
+            prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+        );
+    };
+
+    const toggleLeague = (id: string) => {
+        setSelectedLeagues(prev =>
+            prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+        );
+    };
+
+    const addTeam = (team: Team) => {
+        if (!selectedTeams.find(t => t.id === team.id)) {
+            setSelectedTeams(prev => [...prev, { id: team.id, name: team.name, badge: team.badge }]);
+        }
+        setTeamSearch("");
+        setTeamResults([]);
+    };
+
+    const removeTeam = (id: string) => {
+        setSelectedTeams(prev => prev.filter(t => t.id !== id));
+    };
+
+    const addPlayer = (player: Player) => {
+        if (!selectedPlayers.find(p => p.id === player.id)) {
+            setSelectedPlayers(prev => [...prev, { id: player.id, name: player.name, thumbnail: player.thumbnail }]);
+        }
+        setPlayerSearch("");
+        setPlayerResults([]);
+    };
+
+    const removePlayer = (id: string) => {
+        setSelectedPlayers(prev => prev.filter(p => p.id !== id));
+    };
+
+    const toggleContent = (id: string) => {
+        setSelectedContent(prev =>
+            prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+        );
+    };
+
+    const toggleNotification = (id: string) => {
+        setSelectedNotifications(prev =>
+            prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+        );
     };
 
     const handleNext = () => setStep(prev => prev + 1);
     const handleBack = () => setStep(prev => prev - 1);
 
     const handleComplete = async () => {
-        if (!user) return;
+        if (!user) {
+            setError("You must be logged in to complete onboarding");
+            return;
+        }
+
         setIsSubmitting(true);
+        setError(null);
+
         try {
+            // Save preferences to Firestore
             await setDoc(doc(db, "users", user.uid), {
                 preferences: {
                     sports: selectedSports,
                     leagues: selectedLeagues,
-                    teams: selectedTeams,
-                    players: selectedPlayers,
+                    teams: selectedTeams.map(t => t.name),
+                    teamIds: selectedTeams.map(t => t.id),
+                    players: selectedPlayers.map(p => p.name),
+                    playerIds: selectedPlayers.map(p => p.id),
                     contentTypes: selectedContent,
                     notificationSettings: selectedNotifications,
                 },
@@ -187,16 +247,23 @@ export default function OnboardingPage() {
                 updatedAt: serverTimestamp(),
             }, { merge: true });
 
+            // Update context
             await setOnboardingComplete();
+
+            // Navigate to home
             router.replace("/");
-        } catch (error) {
-            console.error("Onboarding error:", error);
+        } catch (err) {
+            console.error("Onboarding error:", err);
+            setError("Failed to save preferences. Please try again.");
         } finally {
             setIsSubmitting(false);
         }
     };
 
     const stepsCount = 7;
+
+    // Display teams to show (search results or popular)
+    const displayTeams = teamResults.length > 0 ? teamResults : (teamSearch === "" ? popularTeams : []);
 
     return (
         <div className="min-h-screen bg-background text-foreground flex flex-col items-center justify-center p-6 glow-mesh overflow-hidden">
@@ -221,8 +288,16 @@ export default function OnboardingPage() {
                 </div>
             </div>
 
+            {/* Error Message */}
+            {error && (
+                <div className="fixed top-24 left-1/2 -translate-x-1/2 z-50 px-6 py-3 bg-red-500/20 border border-red-500/50 rounded-xl text-red-400 text-sm">
+                    {error}
+                </div>
+            )}
+
             <div className="w-full relative z-10 max-w-4xl">
                 <AnimatePresence mode="wait">
+                    {/* Step 0: Welcome */}
                     {step === 0 && (
                         <StepWrapper
                             key="step-0"
@@ -254,26 +329,33 @@ export default function OnboardingPage() {
                         </StepWrapper>
                     )}
 
+                    {/* Step 1: Sports */}
                     {step === 1 && (
                         <StepWrapper
                             key="step-1"
                             title="Your Favorite Sports"
                             subtitle="What do you love to watch?"
                         >
-                            <SelectionGrid
-                                items={sports}
-                                selected={selectedSports}
-                                onToggle={(id) => toggleItem(id, selectedSports, setSelectedSports)}
-                                renderItem={(sport, isSelected) => (
-                                    <div className={cn(
-                                        "flex flex-col items-center p-6 rounded-2xl border-2 transition-all h-full justify-center",
-                                        isSelected ? "border-primary bg-primary/10 shadow-lg shadow-primary/10" : "border-white/5 bg-white/5 hover:border-white/20"
-                                    )}>
-                                        <span className="text-4xl mb-3">{sport.icon}</span>
-                                        <span className="font-bold text-center text-sm">{sport.name}</span>
-                                    </div>
-                                )}
-                            />
+                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4 w-full">
+                                {sports.map((sport) => {
+                                    const isSelected = selectedSports.includes(sport.id);
+                                    return (
+                                        <motion.div
+                                            key={sport.id}
+                                            whileHover={{ scale: 1.02 }}
+                                            whileTap={{ scale: 0.98 }}
+                                            onClick={() => toggleSport(sport.id)}
+                                            className={cn(
+                                                "flex flex-col items-center p-6 rounded-2xl border-2 transition-all cursor-pointer",
+                                                isSelected ? "border-primary bg-primary/10 shadow-lg shadow-primary/10" : "border-white/5 bg-white/5 hover:border-white/20"
+                                            )}
+                                        >
+                                            <span className="text-4xl mb-3">{sport.icon}</span>
+                                            <span className="font-bold text-center text-sm">{sport.name}</span>
+                                        </motion.div>
+                                    );
+                                })}
+                            </div>
                             <div className="flex gap-4 mt-12">
                                 <button onClick={handleBack} className="px-8 py-4 rounded-2xl border border-white/10 font-bold hover:bg-white/5 transition-all flex items-center gap-2">
                                     <ChevronLeft className="w-5 h-5" /> Back
@@ -289,6 +371,7 @@ export default function OnboardingPage() {
                         </StepWrapper>
                     )}
 
+                    {/* Step 2: Leagues */}
                     {step === 2 && (
                         <StepWrapper
                             key="step-2"
@@ -301,7 +384,7 @@ export default function OnboardingPage() {
                                     return (
                                         <div
                                             key={league.id}
-                                            onClick={() => toggleItem(league.id, selectedLeagues, setSelectedLeagues)}
+                                            onClick={() => toggleLeague(league.id)}
                                             className={cn(
                                                 "flex items-center justify-between p-5 rounded-2xl border transition-all cursor-pointer",
                                                 isSelected ? "border-primary bg-primary/10" : "border-white/5 bg-white/5 hover:border-white/20"
@@ -336,13 +419,35 @@ export default function OnboardingPage() {
                         </StepWrapper>
                     )}
 
+                    {/* Step 3: Teams */}
                     {step === 3 && (
                         <StepWrapper
                             key="step-3"
                             title="Your Teams"
                             subtitle="Search and select the clubs you bleed for."
                         >
-                            <div className="relative w-full mb-8">
+                            {/* Selected Teams Chips */}
+                            {selectedTeams.length > 0 && (
+                                <div className="flex flex-wrap gap-2 mb-6 w-full">
+                                    {selectedTeams.map(team => (
+                                        <div
+                                            key={team.id}
+                                            className="flex items-center gap-2 px-4 py-2 bg-primary/20 border border-primary/40 rounded-full"
+                                        >
+                                            {team.badge && (
+                                                <Image src={team.badge} alt="" width={20} height={20} className="w-5 h-5 rounded-full" />
+                                            )}
+                                            <span className="text-sm font-bold">{team.name}</span>
+                                            <button onClick={() => removeTeam(team.id)} className="hover:text-red-400">
+                                                <X className="w-4 h-4" />
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* Search Input */}
+                            <div className="relative w-full mb-6">
                                 <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-muted w-5 h-5" />
                                 <input
                                     type="text"
@@ -351,31 +456,44 @@ export default function OnboardingPage() {
                                     onChange={(e) => setTeamSearch(e.target.value)}
                                     className="w-full h-16 pl-14 pr-6 rounded-2xl bg-white/5 border border-white/10 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all text-lg"
                                 />
+                                {isSearchingTeams && (
+                                    <Loader2 className="absolute right-5 top-1/2 -translate-y-1/2 w-5 h-5 animate-spin text-primary" />
+                                )}
                             </div>
 
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-h-[400px] overflow-y-auto pr-2 no-scrollbar">
-                                {filteredTeams.map((team) => {
-                                    const isSelected = selectedTeams.includes(team.id);
+                            {/* Teams Grid */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-h-[400px] overflow-y-auto pr-2">
+                                {displayTeams.map((team) => {
+                                    const isSelected = selectedTeams.some(t => t.id === team.id);
                                     return (
                                         <div
                                             key={team.id}
-                                            onClick={() => toggleItem(team.id, selectedTeams, setSelectedTeams)}
+                                            onClick={() => !isSelected && addTeam(team)}
                                             className={cn(
                                                 "flex items-center gap-4 p-4 rounded-xl border transition-all cursor-pointer",
-                                                isSelected ? "border-primary bg-primary/10" : "border-white/5 bg-white/5 hover:border-white/20"
+                                                isSelected ? "border-primary bg-primary/10 opacity-50" : "border-white/5 bg-white/5 hover:border-white/20"
                                             )}
                                         >
-                                            <div className="w-10 h-10 rounded-lg bg-white/10 flex items-center justify-center font-bold">
-                                                {team.name[0]}
-                                            </div>
+                                            {team.badge ? (
+                                                <Image src={team.badge} alt="" width={40} height={40} className="w-10 h-10 rounded-lg object-contain bg-white/10 p-1" />
+                                            ) : (
+                                                <div className="w-10 h-10 rounded-lg bg-white/10 flex items-center justify-center font-bold">
+                                                    {team.name[0]}
+                                                </div>
+                                            )}
                                             <div className="flex-1">
                                                 <div className="font-bold">{team.name}</div>
-                                                <div className="text-xs text-muted">{team.detail}</div>
+                                                <div className="text-xs text-muted">{team.league || team.sport}</div>
                                             </div>
                                             {isSelected && <Check className="w-5 h-5 text-primary" />}
                                         </div>
                                     );
                                 })}
+                                {displayTeams.length === 0 && teamSearch.length >= 2 && !isSearchingTeams && (
+                                    <div className="col-span-2 text-center py-8 text-muted">
+                                        No teams found for &quot;{teamSearch}&quot;
+                                    </div>
+                                )}
                             </div>
 
                             <div className="flex gap-4 mt-8">
@@ -393,13 +511,35 @@ export default function OnboardingPage() {
                         </StepWrapper>
                     )}
 
+                    {/* Step 4: Players */}
                     {step === 4 && (
                         <StepWrapper
                             key="step-4"
                             title="Favorite Players"
-                            subtitle="Who are the icons you follow?"
+                            subtitle="Who are the icons you follow? (Optional)"
                         >
-                            <div className="relative w-full mb-8">
+                            {/* Selected Players Chips */}
+                            {selectedPlayers.length > 0 && (
+                                <div className="flex flex-wrap gap-2 mb-6 w-full">
+                                    {selectedPlayers.map(player => (
+                                        <div
+                                            key={player.id}
+                                            className="flex items-center gap-2 px-4 py-2 bg-primary/20 border border-primary/40 rounded-full"
+                                        >
+                                            {player.thumbnail && (
+                                                <Image src={player.thumbnail} alt="" width={20} height={20} className="w-5 h-5 rounded-full object-cover" />
+                                            )}
+                                            <span className="text-sm font-bold">{player.name}</span>
+                                            <button onClick={() => removePlayer(player.id)} className="hover:text-red-400">
+                                                <X className="w-4 h-4" />
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* Search Input */}
+                            <div className="relative w-full mb-6">
                                 <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-muted w-5 h-5" />
                                 <input
                                     type="text"
@@ -408,31 +548,49 @@ export default function OnboardingPage() {
                                     onChange={(e) => setPlayerSearch(e.target.value)}
                                     className="w-full h-16 pl-14 pr-6 rounded-2xl bg-white/5 border border-white/10 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary transition-all text-lg"
                                 />
+                                {isSearchingPlayers && (
+                                    <Loader2 className="absolute right-5 top-1/2 -translate-y-1/2 w-5 h-5 animate-spin text-primary" />
+                                )}
                             </div>
 
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-h-[400px] overflow-y-auto pr-2 no-scrollbar">
-                                {filteredPlayers.map((player) => {
-                                    const isSelected = selectedPlayers.includes(player.id);
+                            {/* Players Grid */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-h-[400px] overflow-y-auto pr-2">
+                                {playerResults.map((player) => {
+                                    const isSelected = selectedPlayers.some(p => p.id === player.id);
                                     return (
                                         <div
                                             key={player.id}
-                                            onClick={() => toggleItem(player.id, selectedPlayers, setSelectedPlayers)}
+                                            onClick={() => !isSelected && addPlayer(player)}
                                             className={cn(
                                                 "flex items-center gap-4 p-4 rounded-xl border transition-all cursor-pointer",
-                                                isSelected ? "border-primary bg-primary/10" : "border-white/5 bg-white/5 hover:border-white/20"
+                                                isSelected ? "border-primary bg-primary/10 opacity-50" : "border-white/5 bg-white/5 hover:border-white/20"
                                             )}
                                         >
-                                            <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center font-bold overflow-hidden">
-                                                {player.name[0]}
-                                            </div>
+                                            {player.thumbnail ? (
+                                                <Image src={player.thumbnail} alt="" width={40} height={40} className="w-10 h-10 rounded-full object-cover bg-white/10" />
+                                            ) : (
+                                                <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center font-bold">
+                                                    {player.name[0]}
+                                                </div>
+                                            )}
                                             <div className="flex-1">
                                                 <div className="font-bold">{player.name}</div>
-                                                <div className="text-xs text-muted">{player.detail}</div>
+                                                <div className="text-xs text-muted">{player.team || player.sport}</div>
                                             </div>
                                             {isSelected && <Check className="w-5 h-5 text-primary" />}
                                         </div>
                                     );
                                 })}
+                                {playerResults.length === 0 && playerSearch.length >= 2 && !isSearchingPlayers && (
+                                    <div className="col-span-2 text-center py-8 text-muted">
+                                        No players found for &quot;{playerSearch}&quot;
+                                    </div>
+                                )}
+                                {playerSearch.length < 2 && (
+                                    <div className="col-span-2 text-center py-8 text-muted">
+                                        Start typing to search for players...
+                                    </div>
+                                )}
                             </div>
 
                             <div className="flex gap-4 mt-8">
@@ -449,6 +607,7 @@ export default function OnboardingPage() {
                         </StepWrapper>
                     )}
 
+                    {/* Step 5: Content */}
                     {step === 5 && (
                         <StepWrapper
                             key="step-5"
@@ -461,7 +620,7 @@ export default function OnboardingPage() {
                                     return (
                                         <div
                                             key={type.id}
-                                            onClick={() => toggleItem(type.id, selectedContent, setSelectedContent)}
+                                            onClick={() => toggleContent(type.id)}
                                             className={cn(
                                                 "p-8 rounded-3xl border-2 transition-all cursor-pointer flex flex-col items-center gap-4 text-center",
                                                 isSelected ? "border-primary bg-primary/10" : "border-white/5 bg-white/5 hover:border-white/20"
@@ -493,6 +652,7 @@ export default function OnboardingPage() {
                         </StepWrapper>
                     )}
 
+                    {/* Step 6: Notifications */}
                     {step === 6 && (
                         <StepWrapper
                             key="step-6"
@@ -505,7 +665,7 @@ export default function OnboardingPage() {
                                     return (
                                         <div
                                             key={notif.id}
-                                            onClick={() => toggleItem(notif.id, selectedNotifications, setSelectedNotifications)}
+                                            onClick={() => toggleNotification(notif.id)}
                                             className={cn(
                                                 "flex items-center gap-6 p-6 rounded-3xl border transition-all cursor-pointer shadow-sm",
                                                 isSelected ? "border-primary bg-primary/10" : "border-white/5 bg-white/5 hover:border-white/20"
@@ -542,7 +702,7 @@ export default function OnboardingPage() {
                                 <button
                                     onClick={handleComplete}
                                     disabled={isSubmitting}
-                                    className="px-12 py-4 rounded-2xl bg-gradient-to-r from-primary to-primary-dark text-white font-extrabold flex items-center gap-3 transition-all shadow-xl shadow-primary/30 hover:scale-105 active:scale-95"
+                                    className="px-12 py-4 rounded-2xl bg-gradient-to-r from-primary to-primary-dark text-white font-extrabold flex items-center gap-3 transition-all shadow-xl shadow-primary/30 hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     {isSubmitting ? (
                                         <>

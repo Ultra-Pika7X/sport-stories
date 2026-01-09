@@ -27,6 +27,10 @@ const nextConfig: NextConfig = {
         protocol: "https",
         hostname: "image.tmdb.org",
       },
+      {
+        protocol: "https",
+        hostname: "www.thesportsdb.com",
+      },
     ],
   },
   // Enable React strict mode for better development experience

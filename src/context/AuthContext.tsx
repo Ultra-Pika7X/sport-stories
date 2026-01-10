@@ -62,24 +62,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setUser(firebaseUser);
 
             if (firebaseUser) {
-                // Check onboarding status when user logs in
+                // Check localStorage FIRST (free, always works)
+                const localOnboardingComplete = localStorage.getItem(`onboardingComplete_${firebaseUser.uid}`);
+
+                if (localOnboardingComplete === "true") {
+                    setIsOnboardingComplete(true);
+                    setLoading(false);
+                    return;
+                }
+
+                // Fall back to Firestore check
                 try {
                     const userDoc = await getDoc(doc(db, "users", firebaseUser.uid));
                     if (userDoc.exists()) {
-                        setIsOnboardingComplete(userDoc.data()?.onboardingComplete === true);
+                        const complete = userDoc.data()?.onboardingComplete === true;
+                        setIsOnboardingComplete(complete);
+                        // Sync to localStorage
+                        if (complete) {
+                            localStorage.setItem(`onboardingComplete_${firebaseUser.uid}`, "true");
+                        }
                     } else {
                         // Create user document if it doesn't exist
-                        await setDoc(doc(db, "users", firebaseUser.uid), {
-                            email: firebaseUser.email,
-                            displayName: firebaseUser.displayName,
-                            photoURL: firebaseUser.photoURL,
-                            createdAt: serverTimestamp(),
-                            onboardingComplete: false,
-                        });
+                        try {
+                            await setDoc(doc(db, "users", firebaseUser.uid), {
+                                email: firebaseUser.email,
+                                displayName: firebaseUser.displayName,
+                                photoURL: firebaseUser.photoURL,
+                                createdAt: serverTimestamp(),
+                                onboardingComplete: false,
+                            });
+                        } catch {
+                            // Ignore Firestore errors (Spark plan limits)
+                            console.warn("Could not create user doc in Firestore");
+                        }
                         setIsOnboardingComplete(false);
                     }
                 } catch (error) {
                     console.error("Error fetching user data:", error);
+                    // Still allow app to work with localStorage
+                    setIsOnboardingComplete(localOnboardingComplete === "true");
                 }
             } else {
                 setIsOnboardingComplete(false);

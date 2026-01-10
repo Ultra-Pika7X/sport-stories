@@ -230,27 +230,38 @@ export default function OnboardingPage() {
         setIsSubmitting(true);
         setError(null);
 
-        try {
-            // Save preferences to Firestore
-            await setDoc(doc(db, "users", user.uid), {
-                preferences: {
-                    sports: selectedSports,
-                    leagues: selectedLeagues,
-                    teams: selectedTeams.map(t => t.name),
-                    teamIds: selectedTeams.map(t => t.id),
-                    players: selectedPlayers.map(p => p.name),
-                    playerIds: selectedPlayers.map(p => p.id),
-                    contentTypes: selectedContent,
-                    notificationSettings: selectedNotifications,
-                },
-                onboardingComplete: true,
-                updatedAt: serverTimestamp(),
-            }, { merge: true });
+        const preferences = {
+            sports: selectedSports,
+            leagues: selectedLeagues,
+            teams: selectedTeams.map(t => t.name),
+            teamIds: selectedTeams.map(t => t.id),
+            players: selectedPlayers.map(p => p.name),
+            playerIds: selectedPlayers.map(p => p.id),
+            contentTypes: selectedContent,
+            notificationSettings: selectedNotifications,
+        };
 
-            // Update context
+        try {
+            // 1. Save to localStorage FIRST (always works, free)
+            localStorage.setItem(`preferences_${user.uid}`, JSON.stringify(preferences));
+            localStorage.setItem(`onboardingComplete_${user.uid}`, "true");
+
+            // 2. Try to save to Firestore (optional, may fail on Spark plan limits)
+            try {
+                await setDoc(doc(db, "users", user.uid), {
+                    preferences,
+                    onboardingComplete: true,
+                    updatedAt: serverTimestamp(),
+                }, { merge: true });
+            } catch (firestoreError) {
+                // Log but don't fail - localStorage is our primary source
+                console.warn("Firestore sync failed (Spark plan limits?), using localStorage:", firestoreError);
+            }
+
+            // 3. Update context
             await setOnboardingComplete();
 
-            // Navigate to home
+            // 4. Navigate to home
             router.replace("/");
         } catch (err) {
             console.error("Onboarding error:", err);
@@ -435,7 +446,7 @@ export default function OnboardingPage() {
                                             className="flex items-center gap-2 px-4 py-2 bg-primary/20 border border-primary/40 rounded-full"
                                         >
                                             {team.badge && (
-                                                <Image src={team.badge} alt="" width={20} height={20} className="w-5 h-5 rounded-full" />
+                                                <img src={team.badge} alt="" className="w-5 h-5 rounded-full object-contain" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                                             )}
                                             <span className="text-sm font-bold">{team.name}</span>
                                             <button onClick={() => removeTeam(team.id)} className="hover:text-red-400">
@@ -475,7 +486,7 @@ export default function OnboardingPage() {
                                             )}
                                         >
                                             {team.badge ? (
-                                                <Image src={team.badge} alt="" width={40} height={40} className="w-10 h-10 rounded-lg object-contain bg-white/10 p-1" />
+                                                <img src={team.badge} alt="" className="w-10 h-10 rounded-lg object-contain bg-white/10 p-1" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                                             ) : (
                                                 <div className="w-10 h-10 rounded-lg bg-white/10 flex items-center justify-center font-bold">
                                                     {team.name[0]}
@@ -527,7 +538,7 @@ export default function OnboardingPage() {
                                             className="flex items-center gap-2 px-4 py-2 bg-primary/20 border border-primary/40 rounded-full"
                                         >
                                             {player.thumbnail && (
-                                                <Image src={player.thumbnail} alt="" width={20} height={20} className="w-5 h-5 rounded-full object-cover" />
+                                                <img src={player.thumbnail} alt="" className="w-5 h-5 rounded-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                                             )}
                                             <span className="text-sm font-bold">{player.name}</span>
                                             <button onClick={() => removePlayer(player.id)} className="hover:text-red-400">
@@ -567,7 +578,7 @@ export default function OnboardingPage() {
                                             )}
                                         >
                                             {player.thumbnail ? (
-                                                <Image src={player.thumbnail} alt="" width={40} height={40} className="w-10 h-10 rounded-full object-cover bg-white/10" />
+                                                <img src={player.thumbnail} alt="" className="w-10 h-10 rounded-full object-cover bg-white/10" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
                                             ) : (
                                                 <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center font-bold">
                                                     {player.name[0]}

@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   images: {
+    unoptimized: false,
     remotePatterns: [
       {
         protocol: "https",
@@ -30,6 +31,14 @@ const nextConfig: NextConfig = {
       {
         protocol: "https",
         hostname: "www.thesportsdb.com",
+      },
+      {
+        protocol: "https",
+        hostname: "thesportsdb.com",
+      },
+      {
+        protocol: "https",
+        hostname: "**.thesportsdb.com",
       },
     ],
   },

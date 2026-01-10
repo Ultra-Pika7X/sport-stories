@@ -56,7 +56,7 @@ const MOCK_HIGHLIGHTS: Highlight[] = [
   {
     id: "103",
     title: "F1 Monaco Grand Prix: Top Overtakes",
-    category: "f1",
+    category: "motorsport",
     league: "Formula 1",
     thumbnail: "https://images.unsplash.com/photo-1500051638674-bb996a00b717?auto=format&fit=crop&q=80&w=600",
     videoUrl: "",

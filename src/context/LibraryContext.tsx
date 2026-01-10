@@ -60,6 +60,10 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
             });
             setSavedStories(stories);
             setLoading(false);
+        }, (error) => {
+            console.warn("Library: Failed to sync saved stories (likely permission/rules issue):", error);
+            setSavedStories([]);
+            setLoading(false);
         });
 
         return () => unsubscribe();
@@ -85,6 +89,9 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
                 } as SavedArticle);
             });
             setHistory(items);
+        }, (error) => {
+            console.warn("Library: Failed to sync history (likely permission/rules issue):", error);
+            setHistory([]);
         });
 
         return () => unsubscribe();

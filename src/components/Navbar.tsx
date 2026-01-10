@@ -93,7 +93,7 @@ export function Navbar() {
                                     className={cn(
                                         "px-4 py-2 text-sm font-medium rounded-full transition-all duration-300",
                                         isActive
-                                            ? "text-white bg-white/10"
+                                            ? "text-white bg-white/10 shadow-[0_0_15px_rgba(255,255,255,0.1)] border border-white/5"
                                             : "text-white/60 hover:text-white hover:bg-white/5"
                                     )}
                                 >
